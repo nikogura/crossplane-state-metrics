@@ -1,0 +1,208 @@
+# Default values for crossplane-state-metrics.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/nikogura/crossplane-state-metrics
+  # Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Exporter configuration. Every list accepts commas AND newlines, so the block
+# scalar form below stays readable at one entry per line.
+config:
+  # Listen address for /metrics, /healthz and /readyz.
+  metricsAddr: ":8080"
+
+  # CRD categories identifying a Crossplane kind.
+  #
+  # "crossplane" covers every core CRD and every provider-installed managed
+  # resource. "composite" and "claim" are what crossplane-runtime appends to
+  # the CRDs generated from an XRD - those carry no "crossplane" category and
+  # live in whatever API group the XRD author chose, so without these two the
+  # composite layer is invisible.
+  categories: |
+    crossplane
+    composite
+    claim
+
+  # API group globs, which pick up the kinds that ship with no categories at
+  # all — ProviderConfig being the one operators notice.
+  groups: |
+    *.crossplane.io
+    *.upbound.io
+    *.m.upbound.io
+
+  # Namespaces to watch. Empty watches all. Cluster-scoped kinds ignore this
+  # and are always watched cluster-wide.
+  namespaces: ""
+
+  # Kinds and group globs to skip entirely.
+  excludeKinds: ""
+  excludeGroups: ""
+
+  drift:
+    enabled: true
+
+    # subset: every field declared in spec.forProvider must match what was
+    #   observed, and undeclared fields are "don't care". This is the default
+    #   because it does not flag provider-applied defaults or provider-injected
+    #   tags as drift.
+    # strict: additionally reports fields present at the provider that nobody
+    #   declared. Noisier, and occasionally what you want.
+    mode: subset
+
+    # Per-field detail. Off by default: it multiplies series by field count.
+    fields: false
+    fieldsMax: 10
+
+  # Add the crossplane.io/external-name annotation as a metric label, giving a
+  # join key to cloud inventory at the cost of extra label width.
+  externalNameLabel: false
+
+  resync: 10m
+  logLevel: info
+
+  # Cardinality controls. Read the Cardinality section of the README before
+  # changing these: at four series per managed resource it is entirely possible
+  # to take down a shared Prometheus with a large enough Crossplane estate.
+  cardinality:
+    # Hard ceiling on series emitted per scrape. Crossing it truncates the
+    # scrape deterministically and sets crossplane_state_scrape_truncated to 1.
+    # A backstop, not a target. 0 disables it.
+    maxSeries: 1000000
+
+    # Report a kind in aggregate - counts by kind and condition - once it has
+    # more than this many objects. Trades per-object drilldown for a fixed cost
+    # per kind. 0 disables it.
+    aggregateThreshold: 0
+
+    # Drop fields the exporter never reads before caching an object.
+    # managedFields alone is often larger than the rest of the object, and
+    # informer caches hold every watched object in memory.
+    trimCache: true
+
+  # Client-side rate limit on outbound Kubernetes API calls.
+  kubeQPS: 50
+  kubeBurst: 100
+
+# OpenTelemetry.
+otel:
+  # OTLP endpoint for traces. Tracing is a no-op when unset.
+  tracesEndpoint: ""
+
+  metrics:
+    # Prometheus scrapes /metrics; this is off by default and should stay off
+    # unless the environment genuinely cannot scrape. Enabling it does not
+    # disable or degrade the scrape endpoint — push is strictly additive.
+    push: false
+    endpoint: ""
+    interval: 60s
+
+rbac:
+  create: true
+
+  # Grant read on every API group and resource in the cluster.
+  #
+  # This is NOT the default, and the reason is Secrets: a cluster-wide
+  # apiGroups: ["*"] grant includes the core API group, which hands the
+  # exporter every Secret in the cluster. The exporter reads only CRD-defined
+  # resources and never needs them.
+  #
+  # Turn this on only if enumerating provider groups is genuinely impractical
+  # for your fleet, and understand what you are granting.
+  clusterReadAll: false
+
+  # Crossplane's own API groups.
+  coreApiGroups:
+    - apiextensions.crossplane.io
+    - pkg.crossplane.io
+    - ops.crossplane.io
+    - secrets.crossplane.io
+    - protection.crossplane.io
+
+  # Provider-installed groups AND the API groups your XRDs define. RBAC matches
+  # API groups exactly and has no glob, so "*.upbound.io" cannot be expressed
+  # and these must be enumerated.
+  #
+  # Do not forget the XRD groups: composite resources live in whatever group the
+  # XRD author chose, which is usually a private platform domain and never one
+  # of the upbound or crossplane.io groups below.
+  #
+  # A missing grant fails visibly rather than silently: the kind is discovered,
+  # its informer is denied, and the denial lands in
+  # crossplane_state_informer_sync_errors_total{gvr}. Alert on that metric.
+  #
+  # List what your cluster needs with:
+  #   kubectl get crd -o jsonpath='{range .items[*]}{.spec.group}{"\n"}{end}' | sort -u
+  providerApiGroups:
+    - aws.upbound.io
+    - azure.upbound.io
+    - gcp.upbound.io
+    - kubernetes.crossplane.io
+    - helm.crossplane.io
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# Exposing /metrics is not the same as having it scraped. Enable whichever
+# scrape object your Prometheus selects on; both are provided.
+serviceMonitor:
+  enabled: false
+  interval: 60s
+  scrapeTimeout: 50s
+  additionalLabels: {}
+  relabelings: []
+  metricRelabelings: []
+
+podMonitor:
+  enabled: false
+  interval: 60s
+  scrapeTimeout: 50s
+  additionalLabels: {}
+  relabelings: []
+  metricRelabelings: []
+
+# Requests and limits are both set on purpose: the shipped dashboard reports
+# utilisation as a percentage of each, and those panels are meaningless if
+# either is missing. Raise them for a cluster with tens of thousands of managed
+# resources — the informer caches hold every watched object in memory.
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+extraEnv: []
+extraArgs: []

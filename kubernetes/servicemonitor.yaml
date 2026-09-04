@@ -1,0 +1,24 @@
+# Exposing /metrics is not the same as having it scraped. The distribution
+# ships both scrape objects so the exporter is wired into Prometheus on
+# install, not left as an exercise.
+#
+# ServiceMonitor and PodMonitor are both provided because operators run one or
+# the other; apply whichever your Prometheus is configured to select.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: crossplane-state-metrics
+  labels:
+    app.kubernetes.io/name: crossplane-state-metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crossplane-state-metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      # A large fleet takes real time to collect. The interval is longer than
+      # the usual 30s because per-object state does not move fast enough to
+      # justify the scrape cost, and the timeout leaves room for a slow walk.
+      interval: 60s
+      scrapeTimeout: 50s

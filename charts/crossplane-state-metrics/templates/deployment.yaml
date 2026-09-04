@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "crossplane-state-metrics.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-state-metrics.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "crossplane-state-metrics.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "crossplane-state-metrics.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "crossplane-state-metrics.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: exporter
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --metrics-addr={{ .Values.config.metricsAddr }}
+            - --drift={{ .Values.config.drift.enabled }}
+            - --drift-mode={{ .Values.config.drift.mode }}
+            - --drift-fields={{ .Values.config.drift.fields }}
+            - --drift-fields-max={{ .Values.config.drift.fieldsMax }}
+            - --external-name-label={{ .Values.config.externalNameLabel }}
+            - --resync={{ .Values.config.resync }}
+            - --kube-qps={{ .Values.config.kubeQPS }}
+            - --kube-burst={{ .Values.config.kubeBurst }}
+            - --max-series={{ int64 .Values.config.cardinality.maxSeries }}
+            - --aggregate-threshold={{ int64 .Values.config.cardinality.aggregateThreshold }}
+            - --trim-cache={{ .Values.config.cardinality.trimCache }}
+            {{- if .Values.otel.metrics.push }}
+            - --otlp-metrics-push=true
+            - --otlp-metrics-interval={{ .Values.otel.metrics.interval }}
+            {{- end }}
+            {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: CSM_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            # List values accept commas AND newlines, so these stay readable as
+            # block scalars at one entry per line.
+            - name: CSM_CATEGORIES
+              value: |
+                {{- .Values.config.categories | nindent 16 }}
+            - name: CSM_GROUPS
+              value: |
+                {{- .Values.config.groups | nindent 16 }}
+            {{- with .Values.config.namespaces }}
+            - name: CSM_NAMESPACES
+              value: |
+                {{- . | nindent 16 }}
+            {{- end }}
+            {{- with .Values.config.excludeKinds }}
+            - name: CSM_EXCLUDE_KINDS
+              value: |
+                {{- . | nindent 16 }}
+            {{- end }}
+            {{- with .Values.config.excludeGroups }}
+            - name: CSM_EXCLUDE_GROUPS
+              value: |
+                {{- . | nindent 16 }}
+            {{- end }}
+            {{- with .Values.otel.tracesEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if and .Values.otel.metrics.push .Values.otel.metrics.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+              value: {{ .Values.otel.metrics.endpoint | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+
+          # Liveness asks only whether this process is alive. It deliberately
+          # does not depend on the Kubernetes API: if the API is unreachable
+          # the exporter keeps serving its last-good cache and recovers on its
+          # own, and a restart would discard that cache to fix nothing.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 20
+
+          # Readiness reports the CRD watch's initial sync. Until it completes
+          # the view of the cluster is partial, which is worse to scrape than
+          # nothing at all.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

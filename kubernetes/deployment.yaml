@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crossplane-state-metrics
+spec:
+  # A single replica. Two replicas would double every series with a differing
+  # pod label and double the API-server watch load for no availability gain:
+  # the exporter holds no state a restart cannot rebuild from the API in
+  # seconds, and a gap of one scrape interval is not an outage.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: crossplane-state-metrics
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: crossplane-state-metrics
+    spec:
+      serviceAccountName: crossplane-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: exporter
+          image: ghcr.io/nikogura/crossplane-state-metrics:latest
+          args:
+            - --metrics-addr=:8080
+            - --drift=true
+            - --drift-mode=subset
+            # Cardinality backstop. See the README before raising it.
+            - --max-series=1000000
+            - --trim-cache=true
+          env:
+            - name: CSM_LOG_LEVEL
+              value: info
+            # Lists accept commas AND newlines, so a block scalar stays
+            # readable at one entry per line.
+            - name: CSM_CATEGORIES
+              value: |
+                crossplane
+                composite
+                claim
+            - name: CSM_GROUPS
+              value: |
+                *.crossplane.io
+                *.upbound.io
+                *.m.upbound.io
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+
+          # Liveness asks only whether this process is alive. It deliberately
+          # does not depend on the Kubernetes API: if the API is unreachable
+          # the exporter keeps serving its last-good cache and recovers on its
+          # own, and restarting it would throw that cache away to fix nothing.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 20
+
+          # Readiness reports the CRD watch's initial sync. Until it completes
+          # the exporter's view of the cluster is partial, which is worse to
+          # scrape than nothing.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+          # Requests and limits are both set, and set close together: the
+          # dashboard reports utilisation as a percentage of each, which only
+          # means anything if both exist. Raise them for a cluster with tens of
+          # thousands of managed resources — the informer caches hold every
+          # watched object in memory.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

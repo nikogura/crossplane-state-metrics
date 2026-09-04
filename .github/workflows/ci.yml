@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.27'
+  GOLANGCI_VERSION: 'v2.12.2'
+  KUSTOMIZE_VERSION: 'v5.4.3'
+  HELM_VERSION: 'v3.16.3'
+  ENVTEST_K8S_VERSION: '1.37.0'
+  IMAGE: ghcr.io/nikogura/crossplane-state-metrics
+  CHART: charts/crossplane-state-metrics
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+      version_tag: ${{ steps.semver.outputs.version_tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history: the version is computed from commits since the last tag.
+          fetch-depth: 0
+
+      # Next semantic version from conventional-commit subjects since the last
+      # tag: "type!:" or a BREAKING CHANGE footer bumps major, "feat:" bumps
+      # minor, anything else bumps patch.
+      - name: Generate Version
+        id: semver
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
+          version_format: "${major}.${minor}.${patch}"
+          major_pattern: '/^[a-z]+(\([^)]+\))?!:|BREAKING[ -]CHANGE:/'
+          major_regexp_flags: "im"
+          minor_pattern: '/^feat(\([^)]+\))?:/'
+          minor_regexp_flags: "im"
+          search_commit_body: true
+          bump_each_commit: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      # Every tool the Makefile targets need is installed BEFORE they run:
+      # namedreturns and golangci-lint for `make lint`, kustomize and helm for
+      # the distro renders folded into `make test`. A job that runs `make lint`
+      # without installing its linters is a defect, not a flake.
+      - name: Install namedreturns
+        run: go install github.com/nikogura/namedreturns@latest
+
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_VERSION }}
+
+      - name: Install kustomize
+        run: go install sigs.k8s.io/kustomize/kustomize/v5@${{ env.KUSTOMIZE_VERSION }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # The integration tests folded into `make test` run against a real
+      # kube-apiserver and etcd, which setup-envtest fetches.
+      - name: Install setup-envtest
+        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+      - name: Fetch envtest assets
+        run: setup-envtest use ${{ env.ENVTEST_K8S_VERSION }} -p path
+
+      - name: Lint
+        run: make lint
+
+      - name: Test (unit + integration + dashboard + distro renders)
+        run: make test
+
+  # Declaring two platforms to buildx is not the same as shipping two correct
+  # binaries. This job builds the manifest list and checks that the arm64
+  # manifest really contains an aarch64 ELF and the amd64 one an x86-64 ELF,
+  # before anything is published.
+  image:
+    name: Verify Multi-Arch Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and verify both architectures
+        run: make docker-verify
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    # Gate on every check. A release must not ship on a red build, and must not
+    # ship an image whose architectures were never verified.
+    needs: [test, image]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # QEMU is what lets the arm64 image layers be assembled on an amd64
+      # runner; the Go compile itself cross-compiles without it.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ needs.test.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:${{ needs.test.outputs.version_tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Package and push Helm chart
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          helm package ${{ env.CHART }} \
+            --version ${{ needs.test.outputs.version }} \
+            --app-version ${{ needs.test.outputs.version }}
+          helm push crossplane-state-metrics-${{ needs.test.outputs.version }}.tgz \
+            oci://ghcr.io/nikogura/charts
+
+      # The release creates the git tag, so nothing else may also create one:
+      # two taggers is how you end up with vv0.0.1 alongside v0.0.1.
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.test.outputs.version_tag }}
+          name: ${{ needs.test.outputs.version_tag }}
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}

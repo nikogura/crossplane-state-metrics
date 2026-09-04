@@ -1,0 +1,6 @@
+.git
+bin
+charts
+dashboards
+kubernetes
+*.md

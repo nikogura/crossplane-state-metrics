@@ -1,0 +1,57 @@
+# Read-only access to the Crossplane object graph.
+#
+# Two deliberate scoping decisions:
+#
+# 1. The core ("") API group is NOT granted. The exporter reads only
+#    CRD-defined resources, so it never needs Secrets, ConfigMaps or Pods —
+#    and a cluster-wide `apiGroups: ["*"]` grant would hand it every Secret in
+#    the cluster. The narrower grant costs a little maintenance and removes
+#    that exposure entirely.
+#
+# 2. Provider API groups must be enumerated. RBAC matches API groups exactly;
+#    it has no glob, so "*.upbound.io" cannot be expressed. Installing a new
+#    provider therefore means adding its groups here.
+#
+#    A missing grant is a visible failure, not a silent one: the kind is
+#    discovered, its informer is denied, and the denial is counted in
+#    crossplane_state_informer_sync_errors_total{gvr} and logged. Alert on that
+#    metric and you will hear about it the first time it happens.
+#
+#    List the groups a cluster actually needs with:
+#
+#      kubectl get crd -o jsonpath='{range .items[*]}{.spec.group}{"\n"}{end}' \
+#        | sort -u
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: crossplane-state-metrics
+rules:
+  # Discovery: the CRD watch is how every other kind is found.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+
+  # Crossplane core: composites, definitions, compositions and revisions,
+  # packages and their revisions, operations, usages, store configs.
+  - apiGroups:
+      - apiextensions.crossplane.io
+      - pkg.crossplane.io
+      - ops.crossplane.io
+      - secrets.crossplane.io
+      - protection.crossplane.io
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  # Provider-installed managed resources, ProviderConfigs, and the API groups
+  # your XRDs define. Replace these with what your cluster actually installs.
+  #
+  # Composite resources are easy to miss here: they live in whatever group the
+  # XRD author chose, usually a private platform domain, never an upbound one.
+  - apiGroups:
+      - aws.upbound.io
+      - azure.upbound.io
+      - gcp.upbound.io
+      - kubernetes.crossplane.io
+      - helm.crossplane.io
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]

@@ -1,0 +1,49 @@
+{{- if .Values.rbac.create }}
+# Read-only access to the Crossplane object graph.
+#
+# The core ("") API group is deliberately excluded from the default rules: the
+# exporter reads only CRD-defined resources, so it never needs Secrets,
+# ConfigMaps or Pods. Setting rbac.clusterReadAll grants the core group too,
+# which means every Secret in the cluster — see the values file.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "crossplane-state-metrics.fullname" . }}
+  labels:
+    {{- include "crossplane-state-metrics.labels" . | nindent 4 }}
+rules:
+  # Discovery: the CRD watch is how every other kind is found.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+{{- if .Values.rbac.clusterReadAll }}
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+{{- else }}
+{{- $groups := concat .Values.rbac.coreApiGroups .Values.rbac.providerApiGroups }}
+{{- if $groups }}
+  - apiGroups:
+      {{- range $groups }}
+      - {{ . | quote }}
+      {{- end }}
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "crossplane-state-metrics.fullname" . }}
+  labels:
+    {{- include "crossplane-state-metrics.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "crossplane-state-metrics.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "crossplane-state-metrics.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
