@@ -39,15 +39,6 @@
         "refresh": 1
       },
       {
-        "type": "datasource",
-        "name": "tempo",
-        "label": "Tempo",
-        "query": "tempo",
-        "hide": 0,
-        "current": {},
-        "refresh": 1
-      },
-      {
         "type": "query",
         "name": "namespace",
         "label": "Namespace",
@@ -644,7 +635,8 @@
           "legendFormat": "",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -719,7 +711,8 @@
           "legendFormat": "",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -950,7 +943,8 @@
           "legendFormat": "",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -1025,7 +1019,8 @@
           "legendFormat": "",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -1179,7 +1174,8 @@
           "legendFormat": "",
           "refId": "A",
           "instant": true,
-          "range": false
+          "range": false,
+          "format": "table"
         }
       ],
       "transformations": [
@@ -2502,7 +2498,7 @@
     },
     {
       "type": "row",
-      "title": "Logs And Traces",
+      "title": "Logs",
       "id": 37,
       "collapsed": false,
       "gridPos": {
@@ -2524,7 +2520,7 @@
       "description": "Structured JSON logs. Records emitted inside a span carry trace_id and span_id, so a log line links straight to its trace.",
       "gridPos": {
         "h": 10,
-        "w": 14,
+        "w": 24,
         "x": 0,
         "y": 90
       },
@@ -2546,46 +2542,6 @@
         "enableLogDetails": true,
         "dedupStrategy": "none",
         "prettifyLogMessage": true
-      }
-    },
-    {
-      "type": "table",
-      "title": "Recent Traces",
-      "id": 39,
-      "datasource": {
-        "type": "tempo",
-        "uid": "${tempo}"
-      },
-      "description": "Spans emitted by the exporter. Tracing is a no-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set, so this panel is empty until a collector is configured.",
-      "gridPos": {
-        "h": 10,
-        "w": 10,
-        "x": 14,
-        "y": 90
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "tempo",
-            "uid": "${tempo}"
-          },
-          "refId": "A",
-          "queryType": "traceql",
-          "query": "{resource.service.name=\"crossplane-state-metrics\"}",
-          "limit": 20,
-          "tableType": "traces"
-        }
-      ],
-      "options": {
-        "showHeader": true
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto"
-          }
-        },
-        "overrides": []
       }
     }
   ]
