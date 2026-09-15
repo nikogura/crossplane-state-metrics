@@ -40,6 +40,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/expfmt"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -317,12 +318,14 @@ func TestDriftAgainstRealObject(t *testing.T) {
 		return done
 	}, settle, 200*time.Millisecond)
 
+	var text string
+
 	require.Eventually(t, func() (done bool) {
 		problems, err := testutil.GatherAndLint(running.registry)
 		require.NoError(t, err)
 		require.Empty(t, problems)
 
-		text := running.gather(t)
+		text = running.gather(t)
 
 		// The drifted bucket reads 1 and the clean one reads 0.
 		done = strings.Contains(text, "crossplane_state_mr_drift") &&
@@ -333,7 +336,8 @@ func TestDriftAgainstRealObject(t *testing.T) {
 	}, settle, 200*time.Millisecond,
 		"provider-computed fields and injected tags must not count as drift, but a changed region must")
 
-	text := running.gather(t)
+	// Assert against the state the wait verified, rather than re-reading and
+	// hoping it still holds.
 	require.Contains(t, text, `field="region"`, "the differing field path must be reported")
 }
 
@@ -620,16 +624,25 @@ func TestNamespacedManagedResource(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// Wait on the drift verdicts, not merely on the objects appearing. An
+	// object is in resource_info as soon as it is created, while its drift
+	// verdict needs the separate status update to have landed and been
+	// observed — so waiting for the namespace to show up would race the
+	// assertions below.
+	var text string
+
 	require.Eventually(t, func() (done bool) {
-		text := running.gather(t)
-		done = strings.Contains(text, `xp_namespace="team-a"`) &&
-			strings.Contains(text, `xp_namespace="team-b"`)
+		text = running.gather(t)
+		done = namespacedDriftValue(text, "team-a") == 0 &&
+			namespacedDriftValue(text, "team-b") == 1
 
 		return done
 	}, settle, 200*time.Millisecond,
-		"each namespaced object must report its own namespace, not the exporter's")
+		"both namespaced objects must have their observed state recorded before comparing")
 
-	text := running.gather(t)
+	require.Contains(t, text, `xp_namespace="team-a"`,
+		"each namespaced object must report its own namespace, not the exporter's")
+	require.Contains(t, text, `xp_namespace="team-b"`)
 
 	// Two objects share the name "data" and differ only by namespace, so the
 	// namespace label is what keeps them apart.
@@ -746,4 +759,114 @@ func definitionState(text string, name string) (value int) {
 	}
 
 	return value
+}
+
+// TestCompositeLabelFromRealObjects proves the environment dimension survives a
+// real API server round trip, and that filtering on it finds what a name regex
+// misses.
+//
+// Composed resources get generated names. A dashboard scoped to an environment
+// by xp_name regex matches only the ones whose names happen to carry the
+// environment token, and silently drops the rest — so a broken resource sits
+// outside the filter and the environment reads as healthy. The composite label
+// is stamped by crossplane-runtime on all of them regardless of name.
+func TestCompositeLabelFromRealObjects(t *testing.T) {
+	cfg := defaultConfig(t)
+	cfg.CompositeLabel = true
+
+	running := start(t, cfg, crossplaneCRDs(), localCRDs())
+	ctx := context.Background()
+
+	create := func(name string, healthy string) {
+		bucket := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "s3.aws.upbound.io/v1beta1",
+			"kind":       "Bucket",
+			"metadata": map[string]any{
+				"name": name,
+				"labels": map[string]any{
+					"crossplane.io/composite":       "example-env",
+					"crossplane.io/claim-name":      "environment",
+					"crossplane.io/claim-namespace": "team-a",
+				},
+			},
+			"spec": map[string]any{"forProvider": map[string]any{"region": "us-east-1"}},
+		}}
+
+		created, err := running.client.Resource(bucketGVR).Create(ctx, bucket, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		err = unstructured.SetNestedSlice(created.Object, []any{
+			map[string]any{
+				"type": "Ready", "status": healthy, "reason": "Reconciled",
+				"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+			},
+		}, "status", "conditions")
+		require.NoError(t, err)
+
+		_, err = running.client.Resource(bucketGVR).UpdateStatus(ctx, created, metav1.UpdateOptions{})
+		require.NoError(t, err)
+	}
+
+	// One named after the environment, one with a generated name. Both belong
+	// to the same composite; only the generated one is unhealthy.
+	create("example-env-logs", "True")
+	create("data-x7f2q", "False")
+
+	// Wait on the series the assertions actually read.
+	//
+	// An object appears in resource_info as soon as it is created, but its
+	// condition series only exists once the separate status update has landed
+	// and been observed. Waiting for the name to show up anywhere would
+	// therefore pass while one object still had no condition, and the counts
+	// below would race.
+	var text string
+
+	require.Eventually(t, func() (done bool) {
+		text = running.gather(t)
+		done = countConditionSeries(text, `xp_composite="example-env"`) == 2
+
+		return done
+	}, settle, 200*time.Millisecond,
+		"both resources must have their conditions observed before counting")
+
+	require.Contains(t, text, `xp_composite="example-env"`)
+	require.Contains(t, text, `xp_claim="environment"`)
+	require.Contains(t, text, `xp_claim_namespace="team-a"`)
+
+	byName := countConditionSeries(text, `xp_name="example-env`)
+	byComposite := countConditionSeries(text, `xp_composite="example-env"`)
+	unhealthyFound := false
+
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "crossplane_state_resource_condition{") {
+			continue
+		}
+
+		if strings.Contains(line, `xp_composite="example-env"`) && strings.Contains(line, `status="False"`) {
+			unhealthyFound = true
+		}
+	}
+
+	assert.Equal(t, 1, byName,
+		"a name regex finds only the resource named after the environment")
+	assert.Equal(t, 2, byComposite,
+		"the composite label finds every resource the composite owns")
+	assert.True(t, unhealthyFound,
+		"including the unhealthy one a name filter would have hidden")
+}
+
+// countConditionSeries counts resource_condition samples whose label set
+// contains the supplied fragment.
+func countConditionSeries(text string, fragment string) (count int) {
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "crossplane_state_resource_condition{") {
+			continue
+		}
+
+		if strings.Contains(line, fragment) {
+			count++
+		}
+	}
+
+	return count
 }

@@ -179,6 +179,49 @@ Labels: `xp_group`, `xp_version`, `xp_kind`, `xp_name`, `xp_namespace`, and
 optionally `xp_external_name`. Condition series add `condition`, `status` and
 `reason`.
 
+### Composition Ownership
+
+Identity labels say *what* an object is. None of them says which environment it
+belongs to, and that is the dimension an operator actually wants.
+
+`--composite-label` adds three labels that crossplane-runtime already stamps on
+every resource a composite creates, so they cost nothing to read:
+
+| Label | Source |
+| --- | --- |
+| `xp_composite` | `crossplane.io/composite` — the composite that owns it |
+| `xp_claim` | `crossplane.io/claim-name` |
+| `xp_claim_namespace` | `crossplane.io/claim-namespace` |
+
+Without them, the only way to scope a dashboard to an environment is a name
+regex — and that is a trap. Composed resources get **generated** names, and only
+some happen to contain the environment token:
+
+```promql
+# Misses every composed resource not named after the environment.
+crossplane_state_resource_condition{xp_name=~".*example-env.*", status!="True"}
+
+# Exact, and independent of naming.
+crossplane_state_resource_condition{xp_composite="example-env", status!="True"}
+```
+
+The failure is silent and it flatters: the resources the regex drops are simply
+absent from the count, so a filtered environment reads as healthy while broken
+resources sit outside the match.
+
+The labels go on `_resource_info`, `_resource_condition`, `_mr_drift` and
+`_mr_drift_field` together. Putting them on some but not others would mean an
+environment filter changed *which signals* you could see, which is the same
+class of silent gap.
+
+**Cardinality-neutral.** These are functions of the object, and its identity
+labels already determine it uniquely, so they widen existing series rather than
+creating new ones. A resource no composite owns reports empty values, which is
+queryable as such.
+
+Off by default, like `--external-name-label`: it widens every object series, and
+that is a deployment's call.
+
 ### Cardinality
 
 **Read this before pointing the exporter at a large estate. It is entirely
@@ -387,6 +430,7 @@ all.
 | `--drift-fields` | `CSM_DRIFT_FIELDS` | `false` | Emit per-field drift detail. |
 | `--drift-fields-max` | `CSM_DRIFT_FIELDS_MAX` | `10` | Field paths emitted per resource. |
 | `--external-name-label` | `CSM_EXTERNAL_NAME_LABEL` | `false` | Add `xp_external_name` as a label. |
+| `--composite-label` | `CSM_COMPOSITE_LABEL` | `false` | Add `xp_composite`, `xp_claim`, `xp_claim_namespace` — an exact environment dimension. See [Composition Ownership](#composition-ownership). |
 | `--resync` | `CSM_RESYNC` | `10m` | Informer resync period. |
 | `--kube-qps` | `CSM_KUBE_QPS` | `50` | Client-side rate limit, queries per second. |
 | `--kube-burst` | `CSM_KUBE_BURST` | `100` | Client-side burst allowance. |
@@ -512,9 +556,19 @@ cluster-wide read — including every Secret. Know what you are turning on.
 
 ## Dashboard
 
-`dashboards/crossplane-state-metrics.json` ships with the distribution and
-imports into any Grafana: datasources are template variables
-(`${prometheus}`, `${loki}`, `${tempo}`), never hardcoded UIDs.
+Two dashboards ship with the distribution, and both import into any Grafana:
+datasources are template variables, never hardcoded UIDs, and neither carries a
+saved variable selection from the Grafana it came from.
+
+| Dashboard | For |
+| --- | --- |
+| `crossplane-state-metrics.json` | The whole cluster, plus the exporter's own health. Fleet rollups, the provider and package layer, Composition churn, golden signals, logs, traces, pod resources. |
+| `crossplane-managed-resource-health.json` | **One environment.** Which managed resources are Synced and Ready, which are not and why, and which have drifted — all scoped by the `xp_composite` label. |
+
+The second is the day-to-day view. It scopes by **composite**, not by a name
+regex, which requires `--composite-label` on the exporter — see
+[Composition Ownership](#composition-ownership). Without the flag the label is
+absent and the filter degrades to "everything" rather than breaking.
 
 It carries fleet health and drift, the provider/package layer that explains
 fleet failures, Composition churn, the exporter's own golden signals, a Loki

@@ -60,6 +60,9 @@ const (
 	LabelName         = "xp_name"
 	LabelNamespace    = "xp_namespace"
 	LabelExternalName = "xp_external_name"
+	LabelComposite    = "xp_composite"
+	LabelClaim        = "xp_claim"
+	LabelClaimNS      = "xp_claim_namespace"
 	LabelCondition    = "condition"
 	LabelStatus       = "status"
 	LabelReason       = "reason"
@@ -69,6 +72,15 @@ const (
 // externalNameAnnotation is where Crossplane records the identifier a managed
 // resource has at the provider.
 const externalNameAnnotation = "crossplane.io/external-name"
+
+// Composition ownership labels. crossplane-runtime stamps these on every
+// resource a composite creates, so they are already present on the objects and
+// cost nothing to read.
+const (
+	compositeLabel      = "crossplane.io/composite"
+	claimNameLabel      = "crossplane.io/claim-name"
+	claimNamespaceLabel = "crossplane.io/claim-namespace"
+)
 
 // Snapshotter supplies the current contents of the informer caches. The
 // collector takes the narrow interface rather than the concrete watch manager,
@@ -118,6 +130,26 @@ type cachedDrift struct {
 //nolint:gochecknoglobals // an immutable label-name list shared by several descriptors
 var identityLabels = []string{LabelGroup, LabelVersion, LabelKind, LabelName, LabelNamespace}
 
+// ownershipLabels name which composite, and which claim, a composed resource
+// belongs to.
+//
+//nolint:gochecknoglobals // an immutable label-name list shared by several descriptors
+var ownershipLabels = []string{LabelComposite, LabelClaim, LabelClaimNS}
+
+// objectLabelNames returns the per-object label set for the configured
+// options. Every metric describing an individual object uses this, so the
+// composite dimension is available on health and on drift alike — filtering a
+// dashboard to one environment must not change which of the two you can see.
+func objectLabelNames(options config.Config) (names []string) {
+	names = append(names, identityLabels...)
+
+	if options.CompositeLabel {
+		names = append(names, ownershipLabels...)
+	}
+
+	return names
+}
+
 // kindLabels identify a kind rather than an individual object, for the
 // aggregate rollups.
 //
@@ -126,9 +158,11 @@ var kindLabels = []string{LabelGroup, LabelVersion, LabelKind}
 
 // New builds a Collector reading from the supplied snapshot source.
 func New(source Snapshotter, options config.Config, logger *slog.Logger) (collector *Collector) {
-	infoLabels := identityLabels
+	objectLabels := objectLabelNames(options)
+
+	infoLabels := objectLabels
 	if options.ExternalNameLabel {
-		infoLabels = append(append([]string{}, identityLabels...), LabelExternalName)
+		infoLabels = append(append([]string{}, objectLabels...), LabelExternalName)
 	}
 
 	collector = &Collector{
@@ -145,17 +179,17 @@ func New(source Snapshotter, options config.Config, logger *slog.Logger) (collec
 		resourceCondition: prometheus.NewDesc(
 			"crossplane_state_resource_condition",
 			"One series per Crossplane object per status condition. The value is always 1 and the condition's state is carried in the status label, so a new condition type appears without a code change.",
-			append(append([]string{}, identityLabels...), LabelCondition, LabelStatus, LabelReason), nil),
+			append(append([]string{}, objectLabels...), LabelCondition, LabelStatus, LabelReason), nil),
 
 		drift: prometheus.NewDesc(
 			"crossplane_state_mr_drift",
 			"1 when a managed resource's declared spec.forProvider no longer matches its observed status.atProvider, 0 when they agree. Only managed resources have both halves, so only they are compared.",
-			identityLabels, nil),
+			objectLabels, nil),
 
 		driftField: prometheus.NewDesc(
 			"crossplane_state_mr_drift_field",
 			"One series per differing field path on a drifted managed resource. Opt-in, and capped per resource, because it multiplies cardinality by field count.",
-			append(append([]string{}, identityLabels...), LabelField), nil),
+			append(append([]string{}, objectLabels...), LabelField), nil),
 
 		compositionCount: prometheus.NewDesc(
 			"crossplane_state_composition_revisions",
@@ -302,7 +336,7 @@ func (c *Collector) emitInfo(ch chan<- prometheus.Metric, snapshot watch.Snapsho
 		return
 	}
 
-	labels := identityValues(snapshot, object)
+	labels := c.objectValues(snapshot, object)
 
 	if c.options.ExternalNameLabel {
 		labels = append(labels, object.GetAnnotations()[externalNameAnnotation])
@@ -324,7 +358,7 @@ func (c *Collector) emitConditions(ch chan<- prometheus.Metric, snapshot watch.S
 		return
 	}
 
-	identity := identityValues(snapshot, object)
+	identity := c.objectValues(snapshot, object)
 
 	for _, entry := range conditions {
 		condition, ok := entry.(map[string]any)
@@ -350,8 +384,13 @@ func (c *Collector) emitConditions(ch chan<- prometheus.Metric, snapshot watch.S
 	}
 }
 
-// identityValues builds the label values identifying one object.
-func identityValues(snapshot watch.Snapshot, object *unstructured.Unstructured) (values []string) {
+// objectValues builds the label values for one object, in the order
+// objectLabelNames declared them.
+//
+// A resource that is not composed carries none of the ownership labels, so its
+// values are empty. That is the honest answer: the object genuinely has no
+// composite, and an empty label is queryable as such.
+func (c *Collector) objectValues(snapshot watch.Snapshot, object *unstructured.Unstructured) (values []string) {
 	values = []string{
 		snapshot.Kind.GVK.Group,
 		snapshot.Kind.GVK.Version,
@@ -359,6 +398,18 @@ func identityValues(snapshot watch.Snapshot, object *unstructured.Unstructured) 
 		object.GetName(),
 		object.GetNamespace(),
 	}
+
+	if !c.options.CompositeLabel {
+		return values
+	}
+
+	labels := object.GetLabels()
+
+	values = append(values,
+		labels[compositeLabel],
+		labels[claimNameLabel],
+		labels[claimNamespaceLabel],
+	)
 
 	return values
 }

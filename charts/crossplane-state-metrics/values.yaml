@@ -69,6 +69,16 @@ config:
   # join key to cloud inventory at the cost of extra label width.
   externalNameLabel: false
 
+  # Add the composition-ownership labels crossplane-runtime already puts on
+  # every composed resource: xp_composite, xp_claim, xp_claim_namespace.
+  #
+  # This is the environment dimension. Without it the only way to scope a
+  # dashboard to one environment is a name regex, which silently drops every
+  # composed resource whose generated name does not contain the environment
+  # token - and a filtered count then reads as healthy. Cardinality-neutral:
+  # it widens existing series rather than creating new ones.
+  compositeLabel: false
+
   resync: 10m
   logLevel: info
 

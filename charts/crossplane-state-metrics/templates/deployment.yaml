@@ -43,6 +43,7 @@ spec:
             - --drift-fields={{ .Values.config.drift.fields }}
             - --drift-fields-max={{ .Values.config.drift.fieldsMax }}
             - --external-name-label={{ .Values.config.externalNameLabel }}
+            - --composite-label={{ .Values.config.compositeLabel }}
             - --resync={{ .Values.config.resync }}
             - --kube-qps={{ .Values.config.kubeQPS }}
             - --kube-burst={{ .Values.config.kubeBurst }}

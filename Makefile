@@ -49,8 +49,9 @@ integration-test: envtest-assets
 # JSON, so a broken dashboard fails the build like any other defect.
 dashboard-check:
 	@echo "Validating dashboard JSON..."
-	@jq empty dashboards/$(BINARY).json \
-		|| { echo "dashboards/$(BINARY).json is not valid JSON"; exit 1; }
+	@for f in dashboards/*.json; do \
+		jq empty "$$f" || { echo "$$f is not valid JSON"; exit 1; }; \
+	done
 
 # distro-test renders the Kustomize example and the Helm chart.
 distro-test:

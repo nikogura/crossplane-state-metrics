@@ -40,6 +40,24 @@
       },
       {
         "type": "query",
+        "name": "composite",
+        "label": "Composite / Environment",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "query": "label_values(crossplane_state_resource_condition, xp_composite)",
+        "refresh": 1,
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {},
+        "sort": 1,
+        "description": "Which composite owns the resource. Requires --composite-label; with it off the label is absent and All still matches everything. Filter on this rather than a name regex: composed resources get generated names and only some contain the environment token."
+      },
+      {
+        "type": "query",
         "name": "namespace",
         "label": "Namespace",
         "datasource": {
@@ -107,7 +125,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum(crossplane_state_resource_info)",
+          "expr": "sum(crossplane_state_resource_info{xp_composite=~\"$composite\"})",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -229,7 +247,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "count(crossplane_state_resource_condition{condition=\"Ready\",status!=\"True\"}) or vector(0)",
+          "expr": "count(crossplane_state_resource_condition{condition=\"Ready\",status!=\"True\",xp_composite=~\"$composite\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -294,7 +312,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "count(crossplane_state_resource_condition{condition=\"Synced\",status!=\"True\"}) or vector(0)",
+          "expr": "count(crossplane_state_resource_condition{condition=\"Synced\",status!=\"True\",xp_composite=~\"$composite\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -359,7 +377,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum(crossplane_state_mr_drift) or vector(0)",
+          "expr": "sum(crossplane_state_mr_drift{xp_composite=~\"$composite\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -424,7 +442,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "count(crossplane_state_mr_drift) or vector(0)",
+          "expr": "count(crossplane_state_mr_drift{xp_composite=~\"$composite\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -485,7 +503,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "count by (status) (crossplane_state_resource_condition{condition=\"Ready\"})",
+          "expr": "count by (status) (crossplane_state_resource_condition{condition=\"Ready\",xp_composite=~\"$composite\"})",
           "legendFormat": "Ready={{status}}",
           "refId": "A",
           "instant": false,
@@ -558,7 +576,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (xp_kind) (crossplane_state_mr_drift)",
+          "expr": "sum by (xp_kind) (crossplane_state_mr_drift{xp_composite=~\"$composite\"})",
           "legendFormat": "{{xp_kind}}",
           "refId": "A",
           "instant": false,
@@ -631,7 +649,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "crossplane_state_resource_condition{condition=~\"Ready|Synced|Healthy|Installed|Established|Offered|Succeeded\",status!=\"True\"}",
+          "expr": "crossplane_state_resource_condition{condition=~\"Ready|Synced|Healthy|Installed|Established|Offered|Succeeded\",status!=\"True\",xp_composite=~\"$composite\"}",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -707,7 +725,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "crossplane_state_mr_drift > 0",
+          "expr": "crossplane_state_mr_drift{xp_composite=~\"$composite\"} > 0",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -793,7 +811,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "count by (xp_kind, status) (crossplane_state_resource_condition{xp_kind=~\"Provider|Function|Configuration\",condition=\"Healthy\"})",
+          "expr": "count by (xp_kind, status) (crossplane_state_resource_condition{xp_kind=~\"Provider|Function|Configuration\",condition=\"Healthy\",xp_composite=~\"$composite\"})",
           "legendFormat": "{{xp_kind}} Healthy={{status}}",
           "refId": "A",
           "instant": false,
@@ -939,7 +957,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "crossplane_state_resource_condition{xp_kind=~\"Provider|Function|Configuration|ProviderRevision|FunctionRevision|ConfigurationRevision\",condition=~\"Healthy|Installed\",status!=\"True\"}",
+          "expr": "crossplane_state_resource_condition{xp_kind=~\"Provider|Function|Configuration|ProviderRevision|FunctionRevision|ConfigurationRevision\",condition=~\"Healthy|Installed\",status!=\"True\",xp_composite=~\"$composite\"}",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -1170,7 +1188,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "crossplane_state_resource_condition{xp_kind=\"CompositeResourceDefinition\",condition=~\"Established|Offered\",status!=\"True\"}",
+          "expr": "crossplane_state_resource_condition{xp_kind=\"CompositeResourceDefinition\",condition=~\"Established|Offered\",status!=\"True\",xp_composite=~\"$composite\"}",
           "legendFormat": "",
           "refId": "A",
           "instant": true,

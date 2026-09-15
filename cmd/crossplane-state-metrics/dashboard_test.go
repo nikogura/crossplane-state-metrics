@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -39,8 +40,31 @@ import (
 	"github.com/nikogura/crossplane-state-metrics/pkg/watch"
 )
 
-// dashboardPath is the checked-in Grafana dashboard this test validates.
-const dashboardPath = "../../dashboards/crossplane-state-metrics.json"
+// dashboardDir holds the Grafana dashboards shipped with the distribution.
+//
+// Every dashboard in it is checked, rather than a named one, so adding a
+// dashboard cannot quietly arrive unguarded.
+const dashboardDir = "../../dashboards"
+
+// shippedDashboards lists the dashboard files under dashboardDir.
+func shippedDashboards(t *testing.T) (paths []string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dashboardDir)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		paths = append(paths, filepath.Join(dashboardDir, entry.Name()))
+	}
+
+	require.NotEmpty(t, paths, "the distribution must ship at least one dashboard")
+
+	return paths
+}
 
 // metricNamePattern finds this exporter's metric names inside PromQL.
 var metricNamePattern = regexp.MustCompile(`crossplane_state_[a-z0-9_]+`)
@@ -212,10 +236,10 @@ func emittedMetricNames(t *testing.T) (names map[string]struct{}) {
 
 // dashboardMetricReferences extracts every crossplane_state_* name the
 // dashboard's queries mention.
-func dashboardMetricReferences(t *testing.T) (referenced []string) {
+func dashboardMetricReferences(t *testing.T, path string) (referenced []string) {
 	t.Helper()
 
-	raw, err := os.ReadFile(dashboardPath)
+	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 
 	var dashboard any
@@ -268,21 +292,23 @@ func collectExpressions(node any) (expressions []string) {
 // incident. Renaming an instrument without updating the dashboard fails here.
 func TestDashboardReferencesOnlyEmittedMetrics(t *testing.T) {
 	emitted := emittedMetricNames(t)
-	referenced := dashboardMetricReferences(t)
 
-	require.NotEmpty(t, referenced, "the dashboard must query this exporter's metrics")
+	for _, path := range shippedDashboards(t) {
+		referenced := dashboardMetricReferences(t, path)
+		require.NotEmpty(t, referenced, "%s must query this exporter's metrics", path)
 
-	var missing []string
+		var missing []string
 
-	for _, name := range referenced {
-		if isEmitted(name, emitted) {
-			continue
+		for _, name := range referenced {
+			if isEmitted(name, emitted) {
+				continue
+			}
+
+			missing = append(missing, name)
 		}
 
-		missing = append(missing, name)
+		assert.Empty(t, missing, "%s references metrics the exporter never emits: %v", path, missing)
 	}
-
-	assert.Empty(t, missing, "dashboard references metrics the exporter never emits: %v", missing)
 }
 
 // isEmitted reports whether a referenced name maps to an emitted family,
@@ -314,17 +340,63 @@ func isEmitted(name string, emitted map[string]struct{}) (found bool) {
 func TestDashboardUsesTemplatedDatasources(t *testing.T) {
 	t.Parallel()
 
-	raw, err := os.ReadFile(dashboardPath)
-	require.NoError(t, err)
+	for _, path := range shippedDashboards(t) {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
 
-	var dashboard map[string]any
+		var dashboard map[string]any
 
-	err = json.Unmarshal(raw, &dashboard)
-	require.NoError(t, err)
+		err = json.Unmarshal(raw, &dashboard)
+		require.NoError(t, err)
 
-	for _, uid := range collectDatasourceUIDs(dashboard) {
-		assert.True(t, strings.HasPrefix(uid, "${"),
-			"datasource uid %q must be a template variable, not a hardcoded UID", uid)
+		for _, uid := range collectDatasourceUIDs(dashboard) {
+			// Grafana's built-in annotation datasource is a fixed sentinel, not
+			// an installation-specific identifier, and travels fine.
+			if uid == "-- Grafana --" {
+				continue
+			}
+
+			assert.True(t, strings.HasPrefix(uid, "${"),
+				"%s: datasource uid %q must be a template variable, not a hardcoded UID", path, uid)
+		}
+	}
+}
+
+// TestDashboardsCarryNoSavedSelections is a sanitization guard.
+//
+// A dashboard exported from a live Grafana carries the selections it was saved
+// with, and a datasource variable's saved value is that installation's own UID.
+// Shipping it means the dashboard arrives pointed at a datasource that does not
+// exist anywhere else, and renders empty until someone works out why.
+func TestDashboardsCarryNoSavedSelections(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range shippedDashboards(t) {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+
+		var dashboard struct {
+			Templating struct {
+				List []struct {
+					Name    string         `json:"name"`
+					Type    string         `json:"type"`
+					Current map[string]any `json:"current"`
+				} `json:"list"`
+			} `json:"templating"`
+		}
+
+		err = json.Unmarshal(raw, &dashboard)
+		require.NoError(t, err)
+
+		for _, variable := range dashboard.Templating.List {
+			if variable.Type != "datasource" && variable.Type != "query" {
+				continue
+			}
+
+			assert.Empty(t, variable.Current,
+				"%s: variable %q carries a saved selection from the Grafana it was exported from",
+				path, variable.Name)
+		}
 	}
 }
 

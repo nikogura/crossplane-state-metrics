@@ -124,6 +124,18 @@ type Config struct {
 	// at the cost of extra label width.
 	ExternalNameLabel bool
 
+	// CompositeLabel adds the composition-ownership labels crossplane-runtime
+	// already puts on every composed resource: which composite owns it, and
+	// which claim that composite serves.
+	//
+	// Without it the only per-object dimensions are identity — group, version,
+	// kind, name, namespace — and none of those says which environment a
+	// managed resource belongs to. Dashboards end up filtering on a name
+	// regex, which silently drops every composed resource whose generated name
+	// does not happen to contain the environment token, and a filtered count
+	// then reads as healthy while broken resources sit outside the match.
+	CompositeLabel bool
+
 	// Resync is the informer resync period.
 	Resync time.Duration
 
@@ -216,6 +228,8 @@ func Load(args []string) (cfg Config, err error) {
 		"maximum differing field paths emitted per resource")
 	externalName := set.Bool("external-name-label", envBool("CSM_EXTERNAL_NAME_LABEL", false),
 		"add the crossplane.io/external-name annotation as a metric label")
+	compositeLabel := set.Bool("composite-label", envBool("CSM_COMPOSITE_LABEL", false),
+		"add the composite and claim ownership labels, giving an exact environment dimension")
 	resync := set.Duration("resync", envDuration("CSM_RESYNC", DefaultResync),
 		"informer resync period")
 	kubeconfig := set.String("kubeconfig", envOr("KUBECONFIG", ""),
@@ -255,6 +269,7 @@ func Load(args []string) (cfg Config, err error) {
 		DriftFields:        *driftFields,
 		DriftFieldsMax:     *driftFieldsMax,
 		ExternalNameLabel:  *externalName,
+		CompositeLabel:     *compositeLabel,
 		Resync:             *resync,
 		Kubeconfig:         *kubeconfig,
 		LogLevel:           *logLevel,

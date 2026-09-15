@@ -28,6 +28,10 @@ spec:
             - --metrics-addr=:8080
             - --drift=true
             - --drift-mode=subset
+            # Adds xp_composite / xp_claim: the environment dimension. Filter
+            # dashboards on this rather than a name regex, which silently drops
+            # composed resources whose generated names lack the env token.
+            # - --composite-label=true
             # Cardinality backstop. See the README before raising it.
             - --max-series=1000000
             - --trim-cache=true

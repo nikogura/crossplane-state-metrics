@@ -60,7 +60,7 @@ func (c *Collector) emitDrift(ctx context.Context, ch chan<- prometheus.Metric, 
 			break
 		}
 
-		identity := identityValues(snapshot, object)
+		identity := c.objectValues(snapshot, object)
 
 		ch <- prometheus.MustNewConstMetric(c.drift, prometheus.GaugeValue, value, identity...)
 
