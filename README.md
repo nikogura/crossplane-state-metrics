@@ -127,6 +127,7 @@ Three honest limits:
 | `crossplane_state_resource_condition` | gauge | One series per object per status condition. Value always 1; state carried in the `status` label. |
 | `crossplane_state_mr_drift` | gauge | 1 when a managed resource's declared state no longer matches its observed state, else 0. |
 | `crossplane_state_mr_drift_field` | gauge | One series per differing field path. Opt-in, capped per resource. |
+| `crossplane_state_resource_field` | gauge | The numeric value of one configured object field, named by the `field` label. Opt-in per kind and field. See [Field Values](#field-values). |
 | `crossplane_state_composition_revisions` | gauge | Revisions existing for a Composition. |
 | `crossplane_state_composition_current_revision` | gauge | Highest revision number for a Composition. |
 | `crossplane_state_managed_resource_definition_active` | gauge | 1 when a Crossplane v2 `ManagedResourceDefinition` is Active, 0 when Inactive. |
@@ -221,6 +222,45 @@ queryable as such.
 
 Off by default, like `--external-name-label`: it widens every object series, and
 that is a deployment's call.
+
+### Field Values
+
+Health and drift are the questions the exporter exists to answer, and both are
+yes-or-no. Some object fields are numbers worth graphing in their own right —
+how many tasks an ECS Service wants, how much storage an RDS Instance has — and
+no condition carries them.
+
+`--field-metrics` names such fields, one `group/Kind:dotted.path` per entry:
+
+```yaml
+- name: CSM_FIELD_METRICS
+  value: |
+    ecs.aws.m.upbound.io/Service:status.atProvider.desiredCount
+    rds.aws.upbound.io/Instance:status.atProvider.allocatedStorage
+```
+
+Each produces one `crossplane_state_resource_field` series per object of that
+kind, with the field's value and the same object labels as every other
+per-object metric — including `xp_composite` when `--composite-label` is on —
+so it joins a dashboard's existing rows directly:
+
+```promql
+crossplane_state_resource_field{xp_kind="Service", field="status.atProvider.desiredCount"}
+```
+
+What it reports is what the object holds. A field that is absent, or holds
+anything but a number, produces no series rather than a zero, and a kind that
+is reported in aggregate produces none. The group is matched exactly, so a
+namespaced `*.m.upbound.io` kind and its cluster-scoped counterpart are
+configured separately. The path is split on dots, so a key containing a dot
+cannot be named; nothing under `forProvider` or `atProvider` is.
+
+A configured field is kept through `--trim-cache` whatever kind it belongs
+to. Nothing else about the trim changes.
+
+Cost is one series per object per configured field, counted against
+`--max-series` like everything else. A desired count on a thousand services is
+a thousand series; configure fields, not kinds.
 
 ### Cardinality
 
@@ -429,6 +469,7 @@ all.
 | `--drift-mode` | `CSM_DRIFT_MODE` | `subset` | `subset` or `strict`. |
 | `--drift-fields` | `CSM_DRIFT_FIELDS` | `false` | Emit per-field drift detail. |
 | `--drift-fields-max` | `CSM_DRIFT_FIELDS_MAX` | `10` | Field paths emitted per resource. |
+| `--field-metrics` | `CSM_FIELD_METRICS` | *(none)* | Numeric fields to export as gauges, each `group/Kind:dotted.path`. See [Field Values](#field-values). |
 | `--external-name-label` | `CSM_EXTERNAL_NAME_LABEL` | `false` | Add `xp_external_name` as a label. |
 | `--composite-label` | `CSM_COMPOSITE_LABEL` | `false` | Add `xp_composite`, `xp_claim`, `xp_claim_namespace` — an exact environment dimension. See [Composition Ownership](#composition-ownership). |
 | `--resync` | `CSM_RESYNC` | `10m` | Informer resync period. |

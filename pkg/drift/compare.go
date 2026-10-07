@@ -225,8 +225,8 @@ func (w *walker) walkSlice(path string, declared []any, observed []any, schema *
 // int64 or float64 depending on the path taken, so numbers are compared after
 // widening rather than by Go type identity.
 func scalarEqual(left any, right any) (equal bool) {
-	leftNumber, leftIsNumber := toFloat(left)
-	rightNumber, rightIsNumber := toFloat(right)
+	leftNumber, leftIsNumber := Number(left)
+	rightNumber, rightIsNumber := Number(right)
 
 	if leftIsNumber && rightIsNumber {
 		equal = leftNumber == rightNumber
@@ -238,8 +238,9 @@ func scalarEqual(left any, right any) (equal bool) {
 	return equal
 }
 
-// toFloat widens any JSON numeric representation to float64.
-func toFloat(value any) (number float64, isNumber bool) {
+// Number widens any JSON numeric representation to float64, reporting whether
+// the value was numeric at all.
+func Number(value any) (number float64, isNumber bool) {
 	switch typed := value.(type) {
 	case int64:
 		number = float64(typed)

@@ -51,7 +51,7 @@ func sampleObject() (object *unstructured.Unstructured) {
 func transformed(t *testing.T, kind discovery.Kind) (object *unstructured.Unstructured) {
 	t.Helper()
 
-	result, err := trimTransform(kind)(sampleObject())
+	result, err := trimTransform(kind, nil)(sampleObject())
 	require.NoError(t, err)
 
 	var ok bool
@@ -148,7 +148,53 @@ func TestTrimPassesThroughUnknownInput(t *testing.T) {
 
 	kind := discovery.Kind{GVK: schema.GroupVersionKind{Group: "pkg.crossplane.io", Kind: "Provider"}}
 
-	result, err := trimTransform(kind)("not an object")
+	result, err := trimTransform(kind, nil)("not an object")
 	require.NoError(t, err)
 	assert.Equal(t, "not an object", result)
+}
+
+// TestTrimKeepsConfiguredFields covers a field metric on a kind whose spec and
+// atProvider would otherwise be dropped: the configured values must survive the
+// trim, and nothing else must come back with them.
+func TestTrimKeepsConfiguredFields(t *testing.T) {
+	t.Parallel()
+
+	kind := discovery.Kind{
+		GVK:     schema.GroupVersionKind{Group: "ecs.aws.m.upbound.io", Version: "v1beta1", Kind: "Service"},
+		Managed: true,
+	}
+
+	keep := [][]string{
+		{"status", "atProvider", "region"},
+		{"spec", "forProvider", "region"},
+		{"status", "atProvider", "missing"},
+	}
+
+	result, err := trimTransform(kind, keep)(sampleObject())
+	require.NoError(t, err)
+
+	object, ok := result.(*unstructured.Unstructured)
+	require.True(t, ok)
+
+	region, found, err := unstructured.NestedString(object.Object, "status", "atProvider", "region")
+	require.NoError(t, err)
+	assert.True(t, found, "a configured atProvider field must survive on a non-comparable kind")
+	assert.Equal(t, "us-east-1", region)
+
+	declared, found, err := unstructured.NestedString(object.Object, "spec", "forProvider", "region")
+	require.NoError(t, err)
+	assert.True(t, found, "a configured spec field must survive on a kind whose spec is otherwise dropped")
+	assert.Equal(t, "us-east-1", declared)
+
+	_, found, err = unstructured.NestedString(object.Object, "status", "atProvider", "arn")
+	require.NoError(t, err)
+	assert.False(t, found, "fields that were not configured are still dropped")
+
+	_, found, err = unstructured.NestedFieldNoCopy(object.Object, "status", "atProvider", "missing")
+	require.NoError(t, err)
+	assert.False(t, found, "a configured field the object lacks is not invented")
+
+	_, found, err = unstructured.NestedFieldNoCopy(object.Object, "metadata", "managedFields")
+	require.NoError(t, err)
+	assert.False(t, found)
 }

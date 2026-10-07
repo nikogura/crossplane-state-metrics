@@ -100,6 +100,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) {
 		Namespaces: cfg.Namespaces,
 		Resync:     cfg.Resync,
 		TrimCache:  cfg.TrimCache,
+		KeepFields: keptFields(cfg),
 	}, logger)
 
 	stateCollector := collector.New(manager, cfg, logger)
@@ -198,4 +199,14 @@ func parseLevel(level string) (parsed slog.Level) {
 	}
 
 	return parsed
+}
+
+// keptFields tells the watch manager which configured field metrics must
+// survive the cache trim.
+func keptFields(cfg config.Config) (fields []watch.KeptField) {
+	for _, metric := range cfg.FieldMetrics {
+		fields = append(fields, watch.KeptField{Group: metric.Group, Kind: metric.Kind, Path: metric.Path})
+	}
+
+	return fields
 }

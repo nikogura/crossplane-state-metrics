@@ -71,6 +71,20 @@ type Options struct {
 
 	// TrimCache drops unread fields from objects before they are cached.
 	TrimCache bool
+
+	// KeepFields are object fields the collector reads beyond the usual set,
+	// which the trim must leave in place.
+	KeepFields []KeptField
+}
+
+// KeptField is one field of one kind that must survive the cache trim.
+type KeptField struct {
+	// Group and Kind identify the kind, matched exactly.
+	Group string
+	Kind  string
+
+	// Path is the field's location within the object.
+	Path []string
 }
 
 // Snapshot is one kind's objects as of a single read of the caches.
@@ -423,12 +437,23 @@ func (m *Manager) trimCache(ctx context.Context, informer cache.SharedIndexInfor
 		return
 	}
 
-	err := informer.SetTransform(trimTransform(kind))
+	err := informer.SetTransform(trimTransform(kind, m.keptPaths(kind)))
 	if err != nil {
 		m.logger.WarnContext(ctx, "could not install cache transform; objects will be cached in full",
 			slog.String("kind", kind.String()),
 			slog.String("error", err.Error()))
 	}
+}
+
+// keptPaths returns the configured field paths that apply to a kind.
+func (m *Manager) keptPaths(kind discovery.Kind) (paths [][]string) {
+	for _, field := range m.options.KeepFields {
+		if field.Group == kind.GVK.Group && field.Kind == kind.GVK.Kind {
+			paths = append(paths, field.Path)
+		}
+	}
+
+	return paths
 }
 
 // snapshot reads one registration's caches.

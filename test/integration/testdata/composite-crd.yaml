@@ -36,9 +36,11 @@ spec:
                   type: object
                   properties:
                     region: {type: string}
+                    nodeCount: {type: integer}
             status:
               type: object
               properties:
+                nodeCount: {type: integer}
                 conditions:
                   type: array
                   items:

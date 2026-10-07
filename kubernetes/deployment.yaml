@@ -50,6 +50,11 @@ spec:
                 *.crossplane.io
                 *.upbound.io
                 *.m.upbound.io
+            # Numeric object fields to export as gauges, one per line as
+            # group/Kind:dotted.path. One series per object per field.
+            # - name: CSM_FIELD_METRICS
+            #   value: |
+            #     ecs.aws.m.upbound.io/Service:status.atProvider.desiredCount
           ports:
             - name: metrics
               containerPort: 8080

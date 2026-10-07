@@ -31,6 +31,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/nikogura/crossplane-state-metrics/pkg/config"
@@ -100,6 +101,7 @@ type Collector struct {
 	resourceCondition *prometheus.Desc
 	drift             *prometheus.Desc
 	driftField        *prometheus.Desc
+	resourceField     *prometheus.Desc
 	compositionCount  *prometheus.Desc
 	compositionActive *prometheus.Desc
 	definitionActive  *prometheus.Desc
@@ -117,6 +119,9 @@ type Collector struct {
 	// cannot outgrow the cluster.
 	driftMutex sync.Mutex
 	driftCache map[types.UID]cachedDrift
+
+	// fieldMetrics are the configured numeric field exports, by kind.
+	fieldMetrics map[schema.GroupKind][]config.FieldMetric
 }
 
 // cachedDrift is one memoised drift result.
@@ -171,6 +176,8 @@ func New(source Snapshotter, options config.Config, logger *slog.Logger) (collec
 		logger:     logger,
 		driftCache: make(map[types.UID]cachedDrift),
 
+		fieldMetrics: fieldMetricsByKind(options.FieldMetrics),
+
 		resourceInfo: prometheus.NewDesc(
 			"crossplane_state_resource_info",
 			"Presence of a Crossplane object. The value is always 1; identity is carried in labels. Emitted for every object, including the kinds that carry no status conditions.",
@@ -189,6 +196,11 @@ func New(source Snapshotter, options config.Config, logger *slog.Logger) (collec
 		driftField: prometheus.NewDesc(
 			"crossplane_state_mr_drift_field",
 			"One series per differing field path on a drifted managed resource. Opt-in, and capped per resource, because it multiplies cardinality by field count.",
+			append(append([]string{}, objectLabels...), LabelField), nil),
+
+		resourceField: prometheus.NewDesc(
+			"crossplane_state_resource_field",
+			"Value of one numeric field of a Crossplane object, named by the field label. Opt-in per kind and field through --field-metrics, and emitted only where the field is present and numeric.",
 			append(append([]string{}, objectLabels...), LabelField), nil),
 
 		compositionCount: prometheus.NewDesc(
@@ -246,6 +258,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.resourceCondition
 	ch <- c.drift
 	ch <- c.driftField
+	ch <- c.resourceField
 	ch <- c.compositionCount
 	ch <- c.compositionActive
 	ch <- c.definitionActive
@@ -301,6 +314,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		for _, object := range snapshot.Objects {
 			c.emitInfo(ch, snapshot, object, allowance)
 			c.emitConditions(ch, snapshot, object, allowance)
+			c.emitFields(ch, snapshot, object, allowance)
 		}
 
 		driftSeconds += c.emitDrift(ctx, ch, snapshot, allowance)

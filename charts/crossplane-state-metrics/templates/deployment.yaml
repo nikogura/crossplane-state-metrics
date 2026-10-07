@@ -83,6 +83,11 @@ spec:
               value: |
                 {{- . | nindent 16 }}
             {{- end }}
+            {{- with .Values.config.fieldMetrics }}
+            - name: CSM_FIELD_METRICS
+              value: |
+                {{- . | nindent 16 }}
+            {{- end }}
             {{- with .Values.otel.tracesEndpoint }}
             - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
               value: {{ . | quote }}

@@ -113,9 +113,18 @@ func start(t *testing.T, cfg config.Config, crdDirs ...string) (running *harness
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
+	// The cache trim runs here as it does in production, so a test reading a
+	// field the trim would drop fails here rather than in a cluster.
+	keep := make([]watch.KeptField, 0, len(cfg.FieldMetrics))
+	for _, metric := range cfg.FieldMetrics {
+		keep = append(keep, watch.KeptField{Group: metric.Group, Kind: metric.Kind, Path: metric.Path})
+	}
+
 	manager := watch.New(client, watch.Options{
-		Matcher: discovery.NewMatcher(cfg.Categories, cfg.Groups, cfg.ExcludeKinds, cfg.ExcludeGroups),
-		Resync:  time.Minute,
+		Matcher:    discovery.NewMatcher(cfg.Categories, cfg.Groups, cfg.ExcludeKinds, cfg.ExcludeGroups),
+		Resync:     time.Minute,
+		TrimCache:  cfg.TrimCache,
+		KeepFields: keep,
 	}, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -869,4 +878,50 @@ func countConditionSeries(text string, fragment string) (count int) {
 	}
 
 	return count
+}
+
+// TestFieldMetricFromRealObject covers --field-metrics end to end on the kind
+// that is hardest for it: a composite, whose spec and status.atProvider the
+// cache trim drops because nothing else reads them. The configured fields must
+// survive the trim and reach the scrape as values, carrying the object's
+// labels.
+func TestFieldMetricFromRealObject(t *testing.T) {
+	cfg, err := config.Load([]string{
+		"--field-metrics=platform.example.dev/XEksCluster:status.nodeCount\nplatform.example.dev/XEksCluster:spec.parameters.nodeCount",
+	})
+	require.NoError(t, err)
+	require.True(t, cfg.TrimCache, "the trim is on by default, and this test exists to exercise it")
+
+	running := start(t, cfg, crossplaneCRDs(), localCRDs())
+	ctx := context.Background()
+
+	composite := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "platform.example.dev/v1alpha1",
+		"kind":       "XEksCluster",
+		"metadata":   map[string]any{"name": "sized-cluster"},
+		"spec":       map[string]any{"parameters": map[string]any{"region": "us-east-1", "nodeCount": int64(5)}},
+	}}
+
+	created, err := running.client.Resource(compositeGVR).Create(ctx, composite, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, unstructured.SetNestedField(created.Object, int64(3), "status", "nodeCount"))
+
+	_, err = running.client.Resource(compositeGVR).UpdateStatus(ctx, created, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	declared := `crossplane_state_resource_field{field="spec.parameters.nodeCount",xp_group="platform.example.dev",xp_kind="XEksCluster",xp_name="sized-cluster",xp_namespace="",xp_version="v1alpha1"} 5`
+	observed := `crossplane_state_resource_field{field="status.nodeCount",xp_group="platform.example.dev",xp_kind="XEksCluster",xp_name="sized-cluster",xp_namespace="",xp_version="v1alpha1"} 3`
+
+	var text string
+
+	require.Eventually(t, func() (done bool) {
+		text = running.gather(t)
+		done = strings.Contains(text, declared) && strings.Contains(text, observed)
+
+		return done
+	}, settle, 200*time.Millisecond, "both configured fields must reach the scrape with their values; last scrape:\n%s", text)
+
+	require.Equal(t, 2, running.count(t, "crossplane_state_resource_field"),
+		"exactly one series per configured field per object")
 }

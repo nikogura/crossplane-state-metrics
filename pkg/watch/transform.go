@@ -45,7 +45,12 @@ const (
 //
 // status is always kept: conditions live there, and they are the one signal
 // every Crossplane object carries.
-func trimTransform(kind discovery.Kind) (transform cache.TransformFunc) {
+//
+// keep lists the paths of configured field metrics on this kind. Their values
+// are read out before the trim and written back after it, so a field metric
+// on a kind whose spec or atProvider is otherwise dropped still has something
+// to report.
+func trimTransform(kind discovery.Kind, keep [][]string) (transform cache.TransformFunc) {
 	keepSpec := kind.DriftComparable || needsSpec(kind)
 
 	transform = func(input any) (output any, err error) {
@@ -55,6 +60,8 @@ func trimTransform(kind discovery.Kind) (transform cache.TransformFunc) {
 			output = input
 			return output, err
 		}
+
+		kept := readFields(object, keep)
 
 		unstructured.RemoveNestedField(object.Object, fieldMetadata, "managedFields")
 
@@ -68,12 +75,50 @@ func trimTransform(kind discovery.Kind) (transform cache.TransformFunc) {
 			unstructured.RemoveNestedField(object.Object, fieldStatus, "atProvider")
 		}
 
+		err = writeFields(object, kept)
+		if err != nil {
+			return output, err
+		}
+
 		output = object
 
 		return output, err
 	}
 
 	return transform
+}
+
+// keptValue is one configured field's value, read before the trim.
+type keptValue struct {
+	path  []string
+	value any
+}
+
+// readFields collects the values at the configured paths that the object
+// actually holds.
+func readFields(object *unstructured.Unstructured, paths [][]string) (values []keptValue) {
+	for _, path := range paths {
+		value, found, lookupErr := unstructured.NestedFieldNoCopy(object.Object, path...)
+		if lookupErr != nil || !found {
+			continue
+		}
+
+		values = append(values, keptValue{path: path, value: value})
+	}
+
+	return values
+}
+
+// writeFields puts the configured values back after the trim.
+func writeFields(object *unstructured.Unstructured, values []keptValue) (err error) {
+	for _, kept := range values {
+		err = unstructured.SetNestedField(object.Object, kept.value, kept.path...)
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
 }
 
 // needsSpec reports whether a non-managed kind still has spec fields the

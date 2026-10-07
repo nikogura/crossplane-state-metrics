@@ -119,6 +119,10 @@ type Config struct {
 	// resource, bounding cardinality on a badly drifted object.
 	DriftFieldsMax int
 
+	// FieldMetrics names the numeric object fields exported as gauges, one
+	// series per object per field. Empty exports none.
+	FieldMetrics []FieldMetric
+
 	// ExternalNameLabel adds the crossplane.io/external-name annotation as a
 	// label on the resource info metric, giving a join key to cloud inventory
 	// at the cost of extra label width.
@@ -226,6 +230,8 @@ func Load(args []string) (cfg Config, err error) {
 		"emit the per-field drift detail metric (raises cardinality)")
 	driftFieldsMax := set.Int("drift-fields-max", envInt("CSM_DRIFT_FIELDS_MAX", DefaultDriftFieldMax),
 		"maximum differing field paths emitted per resource")
+	fieldMetrics := set.String("field-metrics", os.Getenv("CSM_FIELD_METRICS"),
+		"comma- or newline-separated numeric fields to export as gauges, each written group/Kind:dotted.path")
 	externalName := set.Bool("external-name-label", envBool("CSM_EXTERNAL_NAME_LABEL", false),
 		"add the crossplane.io/external-name annotation as a metric label")
 	compositeLabel := set.Bool("composite-label", envBool("CSM_COMPOSITE_LABEL", false),
@@ -257,6 +263,14 @@ func Load(args []string) (cfg Config, err error) {
 		return cfg, err
 	}
 
+	var fields []FieldMetric
+
+	fields, err = ParseFieldMetrics(*fieldMetrics)
+	if err != nil {
+		err = fmt.Errorf("parsing field-metrics: %w", err)
+		return cfg, err
+	}
+
 	cfg = Config{
 		MetricsAddr:        *metricsAddr,
 		Namespaces:         ParseList(*namespaces),
@@ -268,6 +282,7 @@ func Load(args []string) (cfg Config, err error) {
 		DriftMode:          *driftMode,
 		DriftFields:        *driftFields,
 		DriftFieldsMax:     *driftFieldsMax,
+		FieldMetrics:       fields,
 		ExternalNameLabel:  *externalName,
 		CompositeLabel:     *compositeLabel,
 		Resync:             *resync,

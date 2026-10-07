@@ -65,6 +65,14 @@ config:
     fields: false
     fieldsMax: 10
 
+  # Numeric object fields to export as crossplane_state_resource_field, one
+  # per line as group/Kind:dotted.path. One series per object per field; see
+  # the README, "Field Values".
+  #
+  # fieldMetrics: |
+  #   ecs.aws.m.upbound.io/Service:status.atProvider.desiredCount
+  fieldMetrics: ""
+
   # Add the crossplane.io/external-name annotation as a metric label, giving a
   # join key to cloud inventory at the cost of extra label width.
   externalNameLabel: false
