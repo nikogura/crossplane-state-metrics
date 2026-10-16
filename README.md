@@ -262,6 +262,51 @@ Cost is one series per object per configured field, counted against
 `--max-series` like everything else. A desired count on a thousand services is
 a thousand series; configure fields, not kinds.
 
+### Field Labels
+
+Some of what a dashboard needs about an object is a string, not a number, and
+a string can only ride as a label. The one that comes up first is region: it
+is declared on every managed resource as `spec.forProvider.region`, it is
+one-to-one with the environment, and a panel that needs it, say to point a
+CloudWatch query at the right region, should read it off the metric rather
+than carry a lookup table that breaks the day a second region appears.
+
+`--field-labels` names such fields, written exactly like `--field-metrics`:
+
+```yaml
+- name: CSM_FIELD_LABELS
+  value: |
+    ecs.aws.m.upbound.io/Cluster:spec.forProvider.region
+```
+
+The field's value becomes a label on every per-object series of that kind:
+`resource_info`, `resource_condition`, `mr_drift`, `mr_drift_field` and
+`resource_field` alike. The label is named after the path's last segment, in
+snake case under the `xp_` prefix, so `spec.forProvider.region` is `xp_region`
+and `status.atProvider.availabilityZone` is `xp_availability_zone`. The prefix
+is not negotiable: a bare `region` is exactly the kind of external label a
+multi-cluster Prometheus stamps on at ingestion, and the emitted one would
+silently lose.
+
+```promql
+label_values(crossplane_state_resource_condition{xp_composite=~"$env", xp_kind="Cluster"}, xp_region)
+```
+
+A field that is absent, or holds anything but a string, leaves the label
+empty, and a kind with no field configured for a given name carries that name
+empty too; Prometheus treats an empty label as no label, so nothing churns
+when a value comes or goes. Two kinds whose fields share a leaf share one
+label, which is the point: `xp_region` on every kind that has a region. Two
+fields on one kind that would share a name are rejected at startup, as is a
+name that is already an identity label, such as `metadata.name`.
+
+A label widens series rather than multiplying them, so it costs nothing
+against `--max-series`; what it costs is cardinality, and a string field can
+be as distinct as a name. Promote fields whose values are few and stable, as
+a region or an instance type is, not one that varies per object. A kind
+reported in aggregate has no per-object series and carries no field labels.
+Configured fields are kept through `--trim-cache` like field metrics.
+
 ### Cardinality
 
 **Read this before pointing the exporter at a large estate. It is entirely
@@ -470,6 +515,7 @@ all.
 | `--drift-fields` | `CSM_DRIFT_FIELDS` | `false` | Emit per-field drift detail. |
 | `--drift-fields-max` | `CSM_DRIFT_FIELDS_MAX` | `10` | Field paths emitted per resource. |
 | `--field-metrics` | `CSM_FIELD_METRICS` | *(none)* | Numeric fields to export as gauges, each `group/Kind:dotted.path`. See [Field Values](#field-values). |
+| `--field-labels` | `CSM_FIELD_LABELS` | *(none)* | String fields to carry as `xp_` labels on their kind's series, each `group/Kind:dotted.path`. See [Field Labels](#field-labels). |
 | `--external-name-label` | `CSM_EXTERNAL_NAME_LABEL` | `false` | Add `xp_external_name` as a label. |
 | `--composite-label` | `CSM_COMPOSITE_LABEL` | `false` | Add `xp_composite`, `xp_claim`, `xp_claim_namespace` — an exact environment dimension. See [Composition Ownership](#composition-ownership). |
 | `--resync` | `CSM_RESYNC` | `10m` | Informer resync period. |

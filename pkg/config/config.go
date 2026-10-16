@@ -123,6 +123,10 @@ type Config struct {
 	// series per object per field. Empty exports none.
 	FieldMetrics []FieldMetric
 
+	// FieldLabels names the string object fields carried as labels on every
+	// per-object series of their kind. Empty carries none.
+	FieldLabels []FieldLabel
+
 	// ExternalNameLabel adds the crossplane.io/external-name annotation as a
 	// label on the resource info metric, giving a join key to cloud inventory
 	// at the cost of extra label width.
@@ -232,6 +236,8 @@ func Load(args []string) (cfg Config, err error) {
 		"maximum differing field paths emitted per resource")
 	fieldMetrics := set.String("field-metrics", os.Getenv("CSM_FIELD_METRICS"),
 		"comma- or newline-separated numeric fields to export as gauges, each written group/Kind:dotted.path")
+	fieldLabels := set.String("field-labels", os.Getenv("CSM_FIELD_LABELS"),
+		"comma- or newline-separated string fields to carry as labels on the kind's series, each written group/Kind:dotted.path")
 	externalName := set.Bool("external-name-label", envBool("CSM_EXTERNAL_NAME_LABEL", false),
 		"add the crossplane.io/external-name annotation as a metric label")
 	compositeLabel := set.Bool("composite-label", envBool("CSM_COMPOSITE_LABEL", false),
@@ -265,9 +271,10 @@ func Load(args []string) (cfg Config, err error) {
 
 	var fields []FieldMetric
 
-	fields, err = ParseFieldMetrics(*fieldMetrics)
+	var labels []FieldLabel
+
+	fields, labels, err = parseFieldFlags(*fieldMetrics, *fieldLabels)
 	if err != nil {
-		err = fmt.Errorf("parsing field-metrics: %w", err)
 		return cfg, err
 	}
 
@@ -283,6 +290,7 @@ func Load(args []string) (cfg Config, err error) {
 		DriftFields:        *driftFields,
 		DriftFieldsMax:     *driftFieldsMax,
 		FieldMetrics:       fields,
+		FieldLabels:        labels,
 		ExternalNameLabel:  *externalName,
 		CompositeLabel:     *compositeLabel,
 		Resync:             *resync,
@@ -303,6 +311,24 @@ func Load(args []string) (cfg Config, err error) {
 	}
 
 	return cfg, err
+}
+
+// parseFieldFlags parses the two field-selection flags, naming the flag in
+// any error.
+func parseFieldFlags(fieldMetrics string, fieldLabels string) (fields []FieldMetric, labels []FieldLabel, err error) {
+	fields, err = ParseFieldMetrics(fieldMetrics)
+	if err != nil {
+		err = fmt.Errorf("parsing field-metrics: %w", err)
+		return fields, labels, err
+	}
+
+	labels, err = ParseFieldLabels(fieldLabels)
+	if err != nil {
+		err = fmt.Errorf("parsing field-labels: %w", err)
+		return fields, labels, err
+	}
+
+	return fields, labels, err
 }
 
 // Validate reports configuration that cannot produce a working exporter.
@@ -354,6 +380,12 @@ func (c *Config) Validate() (err error) {
 
 	if c.AggregateThreshold < 0 {
 		err = fmt.Errorf("aggregate-threshold must not be negative, got %d", c.AggregateThreshold)
+		return err
+	}
+
+	err = validateFieldLabels(c.FieldLabels)
+	if err != nil {
+		err = fmt.Errorf("field-labels: %w", err)
 		return err
 	}
 

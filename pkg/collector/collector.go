@@ -122,6 +122,12 @@ type Collector struct {
 
 	// fieldMetrics are the configured numeric field exports, by kind.
 	fieldMetrics map[schema.GroupKind][]config.FieldMetric
+
+	// fieldLabels are the configured string fields carried as labels, by
+	// kind, and fieldLabelNames the label names they produce, in the order
+	// every per-object descriptor declares them.
+	fieldLabels     map[schema.GroupKind][]config.FieldLabel
+	fieldLabelNames []string
 }
 
 // cachedDrift is one memoised drift result.
@@ -145,12 +151,16 @@ var ownershipLabels = []string{LabelComposite, LabelClaim, LabelClaimNS}
 // options. Every metric describing an individual object uses this, so the
 // composite dimension is available on health and on drift alike — filtering a
 // dashboard to one environment must not change which of the two you can see.
+// The field labels follow the same rule: a region read off the object is on
+// its condition, its drift and its field values alike.
 func objectLabelNames(options config.Config) (names []string) {
 	names = append(names, identityLabels...)
 
 	if options.CompositeLabel {
 		names = append(names, ownershipLabels...)
 	}
+
+	names = append(names, config.FieldLabelNames(options.FieldLabels)...)
 
 	return names
 }
@@ -176,7 +186,9 @@ func New(source Snapshotter, options config.Config, logger *slog.Logger) (collec
 		logger:     logger,
 		driftCache: make(map[types.UID]cachedDrift),
 
-		fieldMetrics: fieldMetricsByKind(options.FieldMetrics),
+		fieldMetrics:    fieldMetricsByKind(options.FieldMetrics),
+		fieldLabels:     fieldLabelsByKind(options.FieldLabels),
+		fieldLabelNames: config.FieldLabelNames(options.FieldLabels),
 
 		resourceInfo: prometheus.NewDesc(
 			"crossplane_state_resource_info",
@@ -413,17 +425,17 @@ func (c *Collector) objectValues(snapshot watch.Snapshot, object *unstructured.U
 		object.GetNamespace(),
 	}
 
-	if !c.options.CompositeLabel {
-		return values
+	if c.options.CompositeLabel {
+		labels := object.GetLabels()
+
+		values = append(values,
+			labels[compositeLabel],
+			labels[claimNameLabel],
+			labels[claimNamespaceLabel],
+		)
 	}
 
-	labels := object.GetLabels()
-
-	values = append(values,
-		labels[compositeLabel],
-		labels[claimNameLabel],
-		labels[claimNamespaceLabel],
-	)
+	values = append(values, c.fieldLabelValues(snapshot, object)...)
 
 	return values
 }

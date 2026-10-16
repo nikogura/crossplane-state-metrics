@@ -32,6 +32,9 @@ spec:
             # dashboards on this rather than a name regex, which silently drops
             # composed resources whose generated names lack the env token.
             # - --composite-label=true
+            # Carry a string field as an xp_ label on its kind's series, e.g.
+            # xp_region from spec.forProvider.region. See the README.
+            # - --field-labels=ecs.aws.m.upbound.io/Cluster:spec.forProvider.region
             # Cardinality backstop. See the README before raising it.
             - --max-series=1000000
             - --trim-cache=true

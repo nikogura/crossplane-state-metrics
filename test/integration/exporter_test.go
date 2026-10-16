@@ -115,9 +115,13 @@ func start(t *testing.T, cfg config.Config, crdDirs ...string) (running *harness
 
 	// The cache trim runs here as it does in production, so a test reading a
 	// field the trim would drop fails here rather than in a cluster.
-	keep := make([]watch.KeptField, 0, len(cfg.FieldMetrics))
+	keep := make([]watch.KeptField, 0, len(cfg.FieldMetrics)+len(cfg.FieldLabels))
 	for _, metric := range cfg.FieldMetrics {
 		keep = append(keep, watch.KeptField{Group: metric.Group, Kind: metric.Kind, Path: metric.Path})
+	}
+
+	for _, label := range cfg.FieldLabels {
+		keep = append(keep, watch.KeptField{Group: label.Group, Kind: label.Kind, Path: label.Path})
 	}
 
 	manager := watch.New(client, watch.Options{
@@ -924,4 +928,49 @@ func TestFieldMetricFromRealObject(t *testing.T) {
 
 	require.Equal(t, 2, running.count(t, "crossplane_state_resource_field"),
 		"exactly one series per configured field per object")
+}
+
+// TestFieldLabelFromRealObject covers --field-labels end to end on a
+// composite, whose spec the cache trim drops unless a configured field keeps
+// it. The region declared on the object must reach the scrape as a label on
+// its condition series and on its field series alike.
+func TestFieldLabelFromRealObject(t *testing.T) {
+	cfg, err := config.Load([]string{
+		"--field-labels=platform.example.dev/XEksCluster:spec.parameters.region",
+		"--field-metrics=platform.example.dev/XEksCluster:spec.parameters.nodeCount",
+	})
+	require.NoError(t, err)
+	require.True(t, cfg.TrimCache, "the trim is on by default, and this test exists to exercise it")
+
+	running := start(t, cfg, crossplaneCRDs(), localCRDs())
+	ctx := context.Background()
+
+	composite := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "platform.example.dev/v1alpha1",
+		"kind":       "XEksCluster",
+		"metadata":   map[string]any{"name": "west-cluster"},
+		"spec":       map[string]any{"parameters": map[string]any{"region": "us-west-1", "nodeCount": int64(5)}},
+	}}
+
+	created, err := running.client.Resource(compositeGVR).Create(ctx, composite, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.NoError(t, unstructured.SetNestedField(created.Object,
+		[]any{map[string]any{"type": "Ready", "status": "True", "reason": "Available", "lastTransitionTime": "2026-01-01T00:00:00Z"}},
+		"status", "conditions"))
+
+	_, err = running.client.Resource(compositeGVR).UpdateStatus(ctx, created, metav1.UpdateOptions{})
+	require.NoError(t, err)
+
+	condition := `crossplane_state_resource_condition{condition="Ready",reason="Available",status="True",xp_group="platform.example.dev",xp_kind="XEksCluster",xp_name="west-cluster",xp_namespace="",xp_region="us-west-1",xp_version="v1alpha1"} 1`
+	field := `crossplane_state_resource_field{field="spec.parameters.nodeCount",xp_group="platform.example.dev",xp_kind="XEksCluster",xp_name="west-cluster",xp_namespace="",xp_region="us-west-1",xp_version="v1alpha1"} 5`
+
+	var text string
+
+	require.Eventually(t, func() (done bool) {
+		text = running.gather(t)
+		done = strings.Contains(text, condition) && strings.Contains(text, field)
+
+		return done
+	}, settle, 200*time.Millisecond, "the region must label the condition and field series; last scrape:\n%s", text)
 }

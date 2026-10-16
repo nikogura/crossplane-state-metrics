@@ -201,11 +201,15 @@ func parseLevel(level string) (parsed slog.Level) {
 	return parsed
 }
 
-// keptFields tells the watch manager which configured field metrics must
-// survive the cache trim.
+// keptFields tells the watch manager which configured field metrics and
+// field labels must survive the cache trim.
 func keptFields(cfg config.Config) (fields []watch.KeptField) {
 	for _, metric := range cfg.FieldMetrics {
 		fields = append(fields, watch.KeptField{Group: metric.Group, Kind: metric.Kind, Path: metric.Path})
+	}
+
+	for _, label := range cfg.FieldLabels {
+		fields = append(fields, watch.KeptField{Group: label.Group, Kind: label.Kind, Path: label.Path})
 	}
 
 	return fields

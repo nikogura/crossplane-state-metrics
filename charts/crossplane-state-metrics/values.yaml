@@ -73,6 +73,16 @@ config:
   #   ecs.aws.m.upbound.io/Service:status.atProvider.desiredCount
   fieldMetrics: ""
 
+  # String object fields to carry as labels on every per-object series of
+  # their kind, one per line as group/Kind:dotted.path. The label is named
+  # after the path's leaf under the xp_ prefix, so spec.forProvider.region
+  # becomes xp_region. Widens series, never multiplies them; see the README,
+  # "Field Labels".
+  #
+  # fieldLabels: |
+  #   ecs.aws.m.upbound.io/Cluster:spec.forProvider.region
+  fieldLabels: ""
+
   # Add the crossplane.io/external-name annotation as a metric label, giving a
   # join key to cloud inventory at the cost of extra label width.
   externalNameLabel: false

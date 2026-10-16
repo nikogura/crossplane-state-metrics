@@ -40,37 +40,45 @@ type FieldMetric struct {
 
 // ParseFieldMetric parses one group/Kind:dotted.path entry.
 func ParseFieldMetric(entry string) (metric FieldMetric, err error) {
+	metric.Group, metric.Kind, metric.Path, err = parseFieldEntry("field metric", entry)
+	return metric, err
+}
+
+// parseFieldEntry parses a group/Kind:dotted.path entry into its parts. The
+// noun names the entry's kind of configuration in errors, so a bad value is
+// reported against the flag it came from.
+func parseFieldEntry(noun string, entry string) (group string, kind string, path []string, err error) {
 	kindPart, pathPart, hasPath := strings.Cut(entry, ":")
 	groupPart, kindName, hasKind := strings.Cut(kindPart, "/")
 
 	if !hasPath || !hasKind || strings.Contains(pathPart, "/") {
-		err = fmt.Errorf("field metric %q must be written as group/Kind:dotted.path", entry)
-		return metric, err
+		err = fmt.Errorf("%s %q must be written as group/Kind:dotted.path", noun, entry)
+		return group, kind, path, err
 	}
 
-	metric.Group = strings.TrimSpace(groupPart)
-	metric.Kind = strings.TrimSpace(kindName)
+	group = strings.TrimSpace(groupPart)
+	kind = strings.TrimSpace(kindName)
 
-	if metric.Group == "" {
-		err = fmt.Errorf("field metric %q has an empty group", entry)
-		return metric, err
+	if group == "" {
+		err = fmt.Errorf("%s %q has an empty group", noun, entry)
+		return group, kind, path, err
 	}
 
-	if metric.Kind == "" {
-		err = fmt.Errorf("field metric %q has an empty kind", entry)
-		return metric, err
+	if kind == "" {
+		err = fmt.Errorf("%s %q has an empty kind", noun, entry)
+		return group, kind, path, err
 	}
 
 	for _, segment := range strings.Split(strings.TrimSpace(pathPart), ".") {
 		if segment == "" {
-			err = fmt.Errorf("field metric %q has an empty path segment", entry)
-			return metric, err
+			err = fmt.Errorf("%s %q has an empty path segment", noun, entry)
+			return group, kind, path, err
 		}
 
-		metric.Path = append(metric.Path, segment)
+		path = append(path, segment)
 	}
 
-	return metric, err
+	return group, kind, path, err
 }
 
 // ParseFieldMetrics parses a list value of entries, accepting commas and
